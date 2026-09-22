@@ -1,9 +1,19 @@
 import { DomainInfo, ObjectClassDomain } from "../types";
+import { DomainNotFoundError } from "../errors";
 import { normalizeDate, cleanStatus, secureDNSFromString, attachDSData, lowerAll, matchFirst, matchAll, nowRFC3339 } from "./utils";
+
+// Registry "not registered" replies, e.g. Verisign/Nominet "No match for",
+// Identity Digital "The queried object does not exist", GoDaddy Registry
+// "No Data Found", CIRA/InternetNZ "Not found:", AFNIC "%% NOT FOUND",
+// IIS 'domain "x" not found.', SIDN "x is free", nic.at "% nothing found".
+const NOT_FOUND =
+  /^[\s%#]*(no match for|no data found|no entries found|nothing found|not found\b|the queried object does not exist|domain \S+ not found|\S+ is free\b|status:\s*(free|available)\s*$)/im;
 
 // Generic WHOIS parser for standard IANA EPP-style responses.
 // Used as a fallback for TLDs without a dedicated parser.
 export function parseWhoisGeneric(response: string, domain: string): DomainInfo {
+  if (NOT_FOUND.test(response)) throw new DomainNotFoundError();
+
   const info: DomainInfo = {
     objectClassName: ObjectClassDomain,
     ldhName: domain.toLowerCase(),

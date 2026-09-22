@@ -1,5 +1,6 @@
 import { Hono, Context } from "hono";
-import { Env } from "./types";
+import { WorkerEntrypoint } from "cloudflare:workers";
+import { Env, DomainInfo } from "./types";
 import { isDomain, isIP, isCIDR, isASN, toASCII, extractTLDs, asnNumber } from "./validate";
 import { queryWhois } from "./whois";
 import { rdapQueryDomain, rdapQueryIP, rdapQueryASN } from "./rdap";
@@ -125,20 +126,38 @@ async function handleDomain(c: C, input: string) {
     return errResponse(c, 404, "No WHOIS server found for this domain");
   }
 
+  let lookup: DomainLookup;
+  try {
+    lookup = await lookupDomain(domain, env);
+  } catch (err) {
+    if (err instanceof QueryDeniedError) return errResponse(c, 403, "Registry denied the query");
+    const msg = err instanceof Error ? err.message : String(err);
+    return errResponse(c, 502, `WHOIS query failed: ${msg}`);
+  }
+
+  if (lookup.cached) c.header("X-Cache", "HIT");
+  if (!lookup.data) {
+    if (lookup.cached) c.header("Cache-Control", `public, max-age=${getNegTTL(env)}`);
+    return errResponse(c, 404, "Domain not found");
+  }
+  return conditionalJson(c, lookup.data, getCacheTTL(env));
+}
+
+type DomainLookup = { data: DomainInfo | null; cached: boolean };
+
+// lookupDomain resolves an ASCII domain via RDAP, falling back to WHOIS.
+// data is null when the domain is not registered. Throws QueryDeniedError when
+// the registry refuses, or any other error when the upstream query fails.
+async function lookupDomain(domain: string, env: Env): Promise<DomainLookup> {
   const cacheKey = `domain:${domain}`;
 
   const cached = await cacheGet(cacheKey, env.WHOIS_CACHE);
   if (cached) {
-    c.header("X-Cache", "HIT");
-    if (cached.negative) {
-      c.header("Cache-Control", `public, max-age=${getNegTTL(env)}`);
-      return errResponse(c, 404, "Domain not found");
-    }
-    return conditionalJson(c, cached.data, getCacheTTL(env));
+    return { data: cached.negative ? null : (cached.data as DomainInfo), cached: true };
   }
 
   const tlds = extractTLDs(domain);
-  let result = null;
+  let result: DomainInfo | null = null;
 
   // RDAP first — fall through to WHOIS on any failure (including 404) because
   // RDAP coverage can be incomplete even when WHOIS has full data.
@@ -150,7 +169,7 @@ async function handleDomain(c: C, input: string) {
         result = parseRDAPDomain(resp);
         break;
       } catch (err) {
-        if (err instanceof QueryDeniedError) return errResponse(c, 403, "Registry denied the query");
+        if (err instanceof QueryDeniedError) throw err;
         // ResourceNotFoundError or any other error: fall through to WHOIS
       }
     }
@@ -158,35 +177,28 @@ async function handleDomain(c: C, input: string) {
 
   // WHOIS fallback
   if (!result) {
-    let hadWhoisServer = false;
     for (const tld of tlds) {
       const whoisServer = lookupWhoisServer(tld);
       if (!whoisServer) continue;
-      hadWhoisServer = true;
       try {
         const rawText = await queryWhois(whoisServer, domain, getTimeout(env));
         result = parseWhoisResponse(rawText, domain, tld);
         break;
       } catch (err) {
-        if (err instanceof DomainNotFoundError) {
-          await cacheSet(cacheKey, { data: null, negative: true }, env.WHOIS_CACHE, getNegTTL(env));
-          return errResponse(c, 404, "Domain not found");
-        }
-        const msg = err instanceof Error ? err.message : String(err);
-        return errResponse(c, 502, `WHOIS query failed: ${msg}`);
+        if (err instanceof DomainNotFoundError) break;
+        throw err;
       }
-    }
-    // No WHOIS server either — if RDAP had a server but said not-found, report 404
-    if (!result && !hadWhoisServer) {
-      await cacheSet(cacheKey, { data: null, negative: true }, env.WHOIS_CACHE, getNegTTL(env));
-      return errResponse(c, 404, "Domain not found");
     }
   }
 
-  if (!result) return errResponse(c, 404, "No WHOIS or RDAP server found for this domain");
+  // Not found by RDAP and WHOIS said not-found (or there's no WHOIS server)
+  if (!result) {
+    await cacheSet(cacheKey, { data: null, negative: true }, env.WHOIS_CACHE, getNegTTL(env));
+    return { data: null, cached: false };
+  }
 
   await cacheSet(cacheKey, { data: result }, env.WHOIS_CACHE, getCacheTTL(env));
-  return conditionalJson(c, result, getCacheTTL(env));
+  return { data: result, cached: false };
 }
 
 async function handleIP(c: C, resource: string) {
@@ -281,4 +293,22 @@ app.get("/:resource{.+}", async (c) => {
   return errResponse(c, 400, "Invalid input. Please provide a valid domain, IP, or ASN.");
 });
 
-export default app;
+// RPC entrypoint for service bindings. HTTP requests are served by the Hono app.
+//   [[services]] binding = "WHOIS", service = "whois"
+//   const info = await env.WHOIS.lookup("example.com");
+export default class WhoisService extends WorkerEntrypoint<Env> {
+  fetch(request: Request): Response | Promise<Response> {
+    return app.fetch(request, this.env, this.ctx);
+  }
+
+  // lookup returns parsed domain data, or null if the domain is not registered.
+  // Accepts a bare domain, "@example.com", or an email address; IDNs are
+  // converted to punycode. Throws on invalid input or upstream failure.
+  async lookup(input: string): Promise<DomainInfo | null> {
+    const name = input.trim().toLowerCase().split("@").pop() ?? "";
+    const domain = toASCII(name) || name;
+    if (!isDomain(domain)) throw new Error(`Invalid domain name: ${input}`);
+    const { data } = await lookupDomain(domain, this.env);
+    return data;
+  }
+}
