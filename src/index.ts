@@ -4,7 +4,6 @@ import { isDomain, isIP, isCIDR, isASN, toASCII, extractTLDs, asnNumber } from "
 import { queryWhois } from "./whois";
 import { rdapQueryDomain, rdapQueryIP, rdapQueryASN } from "./rdap";
 import { cacheGet, cacheSet } from "./cache";
-import { handleScheduled } from "./bootstrap";
 import { lookupWhoisServer, lookupRdapServer, lookupIPRdapServer, lookupASNRdapServer } from "./lookup";
 import { parseWhoisResponse, parseRDAPDomain, parseRDAPIP, parseRDAPASN } from "./parsers/index";
 import { DomainNotFoundError, ResourceNotFoundError, QueryDeniedError } from "./errors";
@@ -108,7 +107,7 @@ async function handleDomain(c: C, input: string) {
 
     const tlds = extractTLDs(domain);
     for (const tld of tlds) {
-      const whoisServer = await lookupWhoisServer(tld, env.WHOIS_CACHE);
+      const whoisServer = lookupWhoisServer(tld);
       if (!whoisServer) continue;
       try {
         const rawText = await queryWhois(whoisServer, domain, getTimeout(env));
@@ -144,7 +143,7 @@ async function handleDomain(c: C, input: string) {
   // RDAP first — fall through to WHOIS on any failure (including 404) because
   // RDAP coverage can be incomplete even when WHOIS has full data.
   for (const tld of tlds) {
-    const rdapServer = await lookupRdapServer(tld, env.WHOIS_CACHE);
+    const rdapServer = lookupRdapServer(tld);
     if (rdapServer) {
       try {
         const resp = await rdapQueryDomain(domain, rdapServer);
@@ -161,7 +160,7 @@ async function handleDomain(c: C, input: string) {
   if (!result) {
     let hadWhoisServer = false;
     for (const tld of tlds) {
-      const whoisServer = await lookupWhoisServer(tld, env.WHOIS_CACHE);
+      const whoisServer = lookupWhoisServer(tld);
       if (!whoisServer) continue;
       hadWhoisServer = true;
       try {
@@ -209,7 +208,7 @@ async function handleIP(c: C, resource: string) {
   }
 
   const lookupIP = resource.includes("/") ? resource.split("/")[0] : resource;
-  const rdapServer = await lookupIPRdapServer(lookupIP, env.WHOIS_CACHE);
+  const rdapServer = lookupIPRdapServer(lookupIP);
   if (!rdapServer) return errResponse(c, 404, "No RDAP server found for this IP");
 
   try {
@@ -246,7 +245,7 @@ async function handleASN(c: C, resource: string) {
     return conditionalJson(c, cached.data, getCacheTTL(env));
   }
 
-  const rdapServer = await lookupASNRdapServer(asn, env.WHOIS_CACHE);
+  const rdapServer = lookupASNRdapServer(asn);
   if (!rdapServer) return errResponse(c, 404, "No RDAP server found for this ASN");
 
   try {
@@ -282,9 +281,4 @@ app.get("/:resource{.+}", async (c) => {
   return errResponse(c, 400, "Invalid input. Please provide a valid domain, IP, or ASN.");
 });
 
-export default {
-  fetch: app.fetch,
-  async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
-    await handleScheduled(env);
-  },
-};
+export default app;

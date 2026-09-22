@@ -1,112 +1,46 @@
 import { TLD_TO_RDAP, TLD_TO_WHOIS } from "./servers";
+import { RDAP_IP, RDAP_ASN } from "./rdap-bootstrap";
 
-// KV key prefix for IANA bootstrap override entries
-const BOOTSTRAP_PREFIX = "bootstrap:";
-
-// lookupWhoisServer returns the WHOIS server for a TLD, checking KV bootstrap
-// override first, then falling back to compiled-in map.
-export async function lookupWhoisServer(
-  tld: string,
-  kv: KVNamespace
-): Promise<string | null> {
-  const override = await kv.get(`${BOOTSTRAP_PREFIX}whois:${tld}`, "text");
-  if (override) return override;
+// lookupWhoisServer returns the WHOIS server for a TLD.
+export function lookupWhoisServer(tld: string): string | null {
   return TLD_TO_WHOIS[tld] ?? null;
 }
 
-// lookupRdapServer returns the RDAP base URL for a TLD/key, checking KV
-// bootstrap override first, then the compiled-in map.
-export async function lookupRdapServer(
-  key: string,
-  kv: KVNamespace
-): Promise<string | null> {
-  const override = await kv.get(`${BOOTSTRAP_PREFIX}rdap:${key}`, "text");
-  if (override) return override;
-  return TLD_TO_RDAP[key] ?? null;
+// lookupRdapServer returns the RDAP base URL for a TLD.
+export function lookupRdapServer(tld: string): string | null {
+  return TLD_TO_RDAP[tld] ?? null;
 }
 
-// lookupRdapServerSync does a synchronous lookup in the compiled map only (used
-// in bootstrap.ts before KV is updated).
-export function lookupRdapServerSync(key: string): string | null {
-  return TLD_TO_RDAP[key] ?? null;
+interface CIDREntry {
+  net: Uint8Array;
+  prefixLen: number;
+  url: string;
 }
 
-// lookupIPRdapServer finds the RDAP server for an IP address by scanning the
-// compiled CIDR table. For production traffic the KV bootstrap override (keyed
-// by CIDR) is authoritative; this compiled fallback is used when KV is empty.
-export async function lookupIPRdapServer(
-  ip: string,
-  kv: KVNamespace
-): Promise<string | null> {
-  // Try KV bootstrap first: keys stored as "bootstrap:rdap:<cidr>"
-  // For simplicity, scan compiled map for best-matching prefix
-  return findCIDRServer(ip, kv);
-}
+// Parsed once per isolate, longest prefix first so the first match wins.
+const CIDR_TABLE: CIDREntry[] = RDAP_IP.flatMap(([cidr, url]) => {
+  const slash = cidr.lastIndexOf("/");
+  const host = cidr.slice(0, slash);
+  const net = host.includes(":") ? parseIPv6(host) : parseIPv4(host);
+  const prefixLen = parseInt(cidr.slice(slash + 1), 10);
+  return net && !isNaN(prefixLen) ? [{ net, prefixLen, url }] : [];
+}).sort((a, b) => b.prefixLen - a.prefixLen);
 
-// lookupASNRdapServer finds the RDAP server for an ASN number.
-export async function lookupASNRdapServer(
-  asn: number,
-  kv: KVNamespace
-): Promise<string | null> {
-  return findASNServer(asn, kv);
-}
-
-// findCIDRServer iterates the compiled TLD_TO_RDAP map for CIDR keys and
-// returns the server for the longest-prefix match.
-async function findCIDRServer(
-  ip: string,
-  kv: KVNamespace
-): Promise<string | null> {
-  // Check KV bootstrap list first
-  const kvKey = `${BOOTSTRAP_PREFIX}ip:${ip}`;
-  const kvResult = await kv.get(kvKey, "text");
-  if (kvResult) return kvResult;
-
-  const isV4 = ip.includes(".") && !ip.includes(":");
-  const ipBytes = isV4 ? parseIPv4(ip) : parseIPv6(ip);
+// lookupIPRdapServer returns the RDAP server for the longest-prefix CIDR
+// block containing ip.
+export function lookupIPRdapServer(ip: string): string | null {
+  const ipBytes = ip.includes(":") ? parseIPv6(ip) : parseIPv4(ip);
   if (!ipBytes) return null;
-
-  let best: string | null = null;
-  let bestLen = -1;
-
-  for (const [key, url] of Object.entries(TLD_TO_RDAP)) {
-    if (!key.includes("/")) continue;
-    const slash = key.lastIndexOf("/");
-    const cidrHost = key.slice(0, slash);
-    const cidrLen = parseInt(key.slice(slash + 1), 10);
-
-    const cidrIsV4 = cidrHost.includes(".") && !cidrHost.includes(":");
-    if (cidrIsV4 !== isV4) continue;
-
-    const netBytes = isV4 ? parseIPv4(cidrHost) : parseIPv6(cidrHost);
-    if (!netBytes) continue;
-    if (netBytes.length !== ipBytes.length) continue;
-
-    if (ipInCIDR(ipBytes, netBytes, cidrLen) && cidrLen > bestLen) {
-      best = url;
-      bestLen = cidrLen;
-    }
+  for (const { net, prefixLen, url } of CIDR_TABLE) {
+    if (net.length === ipBytes.length && ipInCIDR(ipBytes, net, prefixLen)) return url;
   }
-  return best;
+  return null;
 }
 
-async function findASNServer(
-  asn: number,
-  kv: KVNamespace
-): Promise<string | null> {
-  // Check KV bootstrap
-  const kvKey = `${BOOTSTRAP_PREFIX}asn:${asn}`;
-  const kvResult = await kv.get(kvKey, "text");
-  if (kvResult) return kvResult;
-
-  for (const [key, url] of Object.entries(TLD_TO_RDAP)) {
-    if (!key.includes("-")) continue;
-    const dash = key.indexOf("-");
-    const lo = parseInt(key.slice(0, dash), 10);
-    const hi = parseInt(key.slice(dash + 1), 10);
-    if (!isNaN(lo) && !isNaN(hi) && asn >= lo && asn <= hi) {
-      return url;
-    }
+// lookupASNRdapServer returns the RDAP server for the range containing asn.
+export function lookupASNRdapServer(asn: number): string | null {
+  for (const [lo, hi, url] of RDAP_ASN) {
+    if (asn >= lo && asn <= hi) return url;
   }
   return null;
 }

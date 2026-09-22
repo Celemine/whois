@@ -113,7 +113,7 @@ Query results are cached in Workers KV. Cache status is indicated by the `X-Cach
 
 ## RDAP bootstrap
 
-A Cron Trigger runs daily to fetch the latest IANA RDAP bootstrap data and write it to KV. This keeps the server registry up to date without redeployment.
+RDAP servers for TLDs, IP blocks, and ASNs come from the [IANA RDAP bootstrap registry](https://data.iana.org/rdap/), compiled into `src/rdap-bootstrap.ts`. To refresh it, run `npm run update-rdap` and redeploy. Supplemental RDAP servers for TLDs missing from the IANA data live in `CUSTOM_RDAP` in `src/servers.ts`.
 
 ## Supported WHOIS parsers
 
