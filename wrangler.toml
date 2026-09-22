@@ -1,0 +1,17 @@
+name = "whois"
+main = "src/index.ts"
+compatibility_date = "2026-06-13"
+compatibility_flags = ["nodejs_compat"]
+
+[[kv_namespaces]]
+binding = "WHOIS_CACHE"
+id = "854187289b944caa84b09a985bbd5122"
+preview_id = "8b4d79dbb58c42bfbebc3c53d8d4bdec"
+
+[triggers]
+crons = ["0 0 * * *"]
+
+[vars]
+WHOIS_TIMEOUT = 10000
+CACHE_TTL = 3600
+NEGATIVE_CACHE_TTL = 60
