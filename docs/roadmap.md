@@ -12,7 +12,7 @@
 
 ```
 whois-workers/
-  wrangler.toml          # KV namespace 绑定、Cron Trigger、vars
+  wrangler.jsonc         # KV namespace 绑定、Cron Trigger、vars
   package.json
   tsconfig.json
   src/index.ts           # Hono app + 路由 + scheduled() 入口
@@ -29,7 +29,7 @@ whois-workers/
 ## 里程碑
 
 ### M0 — 脚手架
-- `npm create cloudflare` 或手建：`wrangler.toml`、`package.json`、`tsconfig.json`、Hono 依赖。
+- `npm create cloudflare` 或手建：`wrangler.jsonc`、`package.json`、`tsconfig.json`、Hono 依赖。
 - 绑定：KV namespace（缓存）、Cron Trigger（bootstrap）、vars（超时 / TTL / bootstrap 间隔）。
 
 ### M1 — 查询核心（跑通单条）
