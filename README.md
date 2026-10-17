@@ -135,7 +135,7 @@ npm install
 
 # Create a KV namespace
 npx wrangler kv namespace create WHOIS_CACHE
-# Paste the returned id into wrangler.toml [[kv_namespaces]] → id / preview_id
+# Paste the returned id into wrangler.jsonc kv_namespaces → id / preview_id
 
 # Local development
 npm run dev
@@ -144,7 +144,7 @@ npm run dev
 npm run deploy
 ```
 
-### Configuration (`wrangler.toml` vars)
+### Configuration (`wrangler.jsonc` vars)
 
 | Variable | Default | Description |
 |---|---|---|

@@ -40,7 +40,7 @@
 | Prometheus 指标 | 进程内累加 `/metrics` (`internal/metrics/`) | ⚠️ 不适用 | Workers Analytics Engine（MVP 不做） |
 | MCP endpoint | go-sdk Streamable HTTP/SSE (`internal/mcp/`) | ⚠️ 可行但复杂 | Workers 支持流式响应；MVP 不做 |
 | 优雅关闭 / 信号 | SIGTERM + WaitGroup (`main.go`) | ❌ 不适用 | Workers 无信号，请求级 context 即可 |
-| 配置 | 启动读 config.yaml/json (`internal/config/`) | ✅ 已支持 env | `wrangler.toml` vars + Secrets（源项目已有 `WHOIS_*` 覆盖逻辑） |
+| 配置 | 启动读 config.yaml/json (`internal/config/`) | ✅ 已支持 env | `wrangler.jsonc` vars + Secrets（源项目已有 `WHOIS_*` 覆盖逻辑） |
 
 ---
 
